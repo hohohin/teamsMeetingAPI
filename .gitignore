@@ -1,2 +1,5 @@
 .env
 *.db
+removed
+.venv
+__pycache__

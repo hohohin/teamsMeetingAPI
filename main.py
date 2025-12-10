@@ -162,7 +162,7 @@ app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://yapteamsmeeting.onrender.com", "http://localhost:5173"],
+    allow_origins=["https://ecmeetings.org","https://yapteamsmeeting.onrender.com","http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
