@@ -56,7 +56,6 @@ async def process_submission(db: Session):
     """
     crud = SubsCRUD(db)
     pending_tasks = crud.get_tasks_by_status("NONE")
-    internal_client = init_client('cn-hongkong', True)
     
     for task in pending_tasks:
         try:
@@ -74,7 +73,7 @@ async def process_submission(db: Session):
             
             # 2. 调用 Server 代码提交任务 (运行在线程池中以免阻塞)
             # 使用 task.id 作为 task_key，方便后续追踪
-            res = await asyncio.to_thread(server.submit_task, internal_client, task.id)
+            res = await asyncio.to_thread(server.submit_task, cdn_url, task.id)
             
             # 3. 更新数据库
             if res and res.get("task_id"):
@@ -90,8 +89,6 @@ async def process_submission(db: Session):
                 
         except Exception as e:
             logger.error(f"[Submit] Error processing {task.object_key}: {e}")
-
-    await internal_client.close()
 
 async def process_polling(db: Session):
     """
@@ -175,37 +172,52 @@ app.add_middleware(
 
 # --- API 路由 ---
 
-@app.get("/api/files/")
-async def get_files(db: Session = Depends(get_db)):
+@app.get("/api/files/{region}")
+async def get_files(region: str, db: Session = Depends(get_db)):
     """同步 OSS 文件列表到数据库"""
-    crud = SubsCRUD(db)
-    client = init_client('cn-hongkong')
-    try:
-        result = await get_all_files(client,'yaps-meeting')
-        for item in result.contents:
-            # 检查数据库是否存在
-            record = crud.get_sub_by_key(item.key)
-            
-            if record is None:
-                # 发现新文件，插入数据库，状态设为 NONE (等待后台自动提交)
-                new_sub = {
-                    "id": str(uuid4()),
-                    "object_key": item.key,
-                    "region": 'cn-hongkong',
-                    "size": item.size,
-                    "last_modified": item.last_modified.strftime("%Y-%m-%d %H:%M:%S"),
-                    "status": "NONE"
-                }
-                crud.create_sub(new_sub)
-                logger.info(f"Synced new file: {item.key}")
-            else:
-                # 更新已有文件信息
-                crud.update_task(
-                    record, 
-                    size=item.size, 
-                    last_modified=item.last_modified.strftime("%Y-%m-%d %H:%M:%S")
-                )
+    if not TOS_AK or not TOS_SK:
+        raise HTTPException(status_code=500, detail="TOS credentials missing")
 
+    try:
+        bucket_name, endpoint = get_tos_config(region)
+        client = tos.TosClientV2(TOS_AK, TOS_SK, endpoint, region)
+        
+        truncated = True
+        continuation_token = ''
+        crud = SubsCRUD(db)
+
+        while truncated:
+            result = await asyncio.to_thread(
+                client.list_objects_type2, bucket_name, continuation_token=continuation_token # type: ignore
+            )
+            
+            for item in result.contents:
+                # 检查数据库是否存在
+                record = crud.get_sub_by_key(item.key)
+                
+                if record is None:
+                    # 发现新文件，插入数据库，状态设为 NONE (等待后台自动提交)
+                    new_sub = {
+                        "id": str(uuid4()),
+                        "object_key": item.key,
+                        "region": region,
+                        "size": item.size,
+                        "last_modified": item.last_modified.strftime("%Y-%m-%d %H:%M:%S"),
+                        "status": "NONE"
+                    }
+                    crud.create_sub(new_sub)
+                    logger.info(f"Synced new file: {item.key}")
+                else:
+                    # 更新已有文件信息
+                    crud.update_task(
+                        record, 
+                        size=item.size, 
+                        last_modified=item.last_modified.strftime("%Y-%m-%d %H:%M:%S")
+                    )
+            
+            truncated = result.is_truncated
+            continuation_token = result.next_continuation_token
+            
         # 返回所有文件记录
             all_records = crud.db.query(SubsMetaDB).all()
         # 注意：实际生产中这里应该分页，否则数据库大时会卡死
@@ -214,13 +226,18 @@ async def get_files(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error syncing files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        await client.close()
+
 
 @app.post("/api/upload/{region}")
 async def upload_file(region: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     """上传文件到 TOS 并写入数据库 (Status=NONE)"""
+    if not TOS_AK or not TOS_SK:
+        raise HTTPException(status_code=500, detail="TOS credentials missing")
+    if file.filename is None:
+        return
+
     object_key = file.filename
+    bucket_name, endpoint = get_tos_config(region)
     crud = SubsCRUD(db)
 
     try:
@@ -231,11 +248,12 @@ async def upload_file(region: str, file: UploadFile = File(...), db: Session = D
             # 这里选择覆盖上传，但要重置状态
             pass 
 
-        # 2. 上传到 OSS (异步运行)
-        client = await init_client('cn-hongkong')
-
+        # 2. 上传到 TOS (异步运行)
+        client = tos.TosClientV2(TOS_AK, TOS_SK, endpoint, region)
+        
         # 读取文件内容
         content = await file.read()
+        
         res = await asyncio.to_thread(
             client.put_object, bucket_name, object_key, content=content
         )
@@ -271,6 +289,18 @@ async def upload_file(region: str, file: UploadFile = File(...), db: Session = D
 async def download_file(region:str, object_key: str):
     # 后续可添加属性：下载次数
     print(f"object key get: {object_key}, in {region}")
+    # ================= TOS Client 初始化 =================
+    match region:
+        case "guangzhou":
+            bucket_name = "yings-meeting"
+            endpoint="tos-cn-guangzhou.volces.com"
+        case "hongkong":
+            bucket_name = "bucket4hk"    
+            endpoint="tos-cn-hongkong.volces.com"
+    # 简单的配置检查，防止因空配置导致的连接错误
+    if not TOS_AK or not TOS_SK:
+        logger.warning("⚠️ 警告: TOS 配置信息(AK/SK)似乎为空。请检查 main.py 中的配置区域或环境变量。")
+        return
     try:
     # =========== 创建 TosClientV2 对象，对桶和对象的操作都通过 TosClientV2 实现
         client = tos.TosClientV2(TOS_AK, TOS_SK, endpoint, region)

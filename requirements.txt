@@ -5,3 +5,5 @@ psycopg2-binary
 alibabacloud_tingwu20230930==2.0.24
 python-dotenv
 sqlalchemy
+alibabacloud-oss-v2
+aiohttp

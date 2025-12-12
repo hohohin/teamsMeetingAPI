@@ -8,9 +8,11 @@ from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tingwu20230930 import models as tingwu_20230930_models
 from alibabacloud_tea_util import models as util_models
 from alibabacloud_tea_util.client import Client as UtilClient
+import alibabacloud_oss_v2 as oss
 
 from dotenv import load_dotenv
 
+from aos import init_client
 
 class QueryResult:
     MeetingAssistance: str
@@ -56,7 +58,19 @@ def create_client() -> tingwu20230930Client:
     return tingwu20230930Client(config)
 
 
-def submit_task(file_url: str, task_key: str):
+def submit_task(oss_internal_client, task_key: str):
+    # oss internal client
+    oss_client = oss_internal_client
+    # 生成预签名的GET请求
+    pre_result = oss_client.presign(
+        oss.GetObjectRequest(
+            bucket='yaps-meeting',  # 指定存储空间名称
+            key=task_key,        # 指定对象键名
+        )
+    )
+    internal_url = pre_result.url
+
+    # stt client
     client = create_client()
     parameters_summarization = tingwu_20230930_models.CreateTaskRequestParametersSummarization(
         types=[
@@ -77,7 +91,7 @@ def submit_task(file_url: str, task_key: str):
     )
     input = tingwu_20230930_models.CreateTaskRequestInput(
         source_language='fspk',
-        file_url= file_url,
+        file_url= internal_url,
         task_key= task_key
     )
     create_task_request = tingwu_20230930_models.CreateTaskRequest(
