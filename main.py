@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 from database import init_db, SessionLocal, SubsCRUD, SubsMetaDB
 from models import SubsMeta
 import server  # 你的阿里云交互代码
-from aos import init_client, get_all_files
+import aos
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -56,14 +56,14 @@ async def process_submission(db: Session):
     """
     crud = SubsCRUD(db)
     pending_tasks = crud.get_tasks_by_status("NONE")
-    internal_client = init_client('cn-hongkong', True)
+    internal_client = aos.init_client(is_asycn=False, endpoint='internal')
     
     for task in pending_tasks:
         try:
             logger.info(f"[Submit] Processing pending task: {task.object_key}")
             
             # 1. 构造 TOS URL
-            bucket, endpoint = get_tos_config(task.region)
+            # bucket, endpoint = get_tos_config(task.region)
             # 注意：如果是私有读Bucket，这里需要生成带签名的URL, 替换 URL 生成逻辑为：
             # client = tos.TosClientV2(TOS_AK, TOS_SK, endpoint, task.region)
             # file_url = client.generate_presigned_url("GET", bucket, task.object_key, expires=3600)
@@ -90,8 +90,6 @@ async def process_submission(db: Session):
                 
         except Exception as e:
             logger.error(f"[Submit] Error processing {task.object_key}: {e}")
-
-    await internal_client.close()
 
 async def process_polling(db: Session):
     """
@@ -179,9 +177,9 @@ app.add_middleware(
 async def get_files(db: Session = Depends(get_db)):
     """同步 OSS 文件列表到数据库"""
     crud = SubsCRUD(db)
-    client = init_client('cn-hongkong')
+    client = aos.init_client()
     try:
-        result = await get_all_files(client,'yaps-meeting')
+        result = await aos.get_all_files(client,'yaps-meeting')
         for item in result.contents:
             # 检查数据库是否存在
             record = crud.get_sub_by_key(item.key)
@@ -342,6 +340,13 @@ async def file_detail(object_key: str, db: Session = Depends(get_db)):
     if db_sub is None:
         raise HTTPException(status_code=404, detail="Subtitle not found")
     
+    client = aos.init_client(is_asycn=False, endpoint='custom')
+
+    try:
+        url = aos.get_object_url(client, object_key)
+    except Exception as e:
+        raise HTTPException(500, f"Error getting url: {e}")
+
     # 如果 query_res 是 JSON 字符串，可以反序列化为 dict（可选）
     result = {
         "id": db_sub.id,
@@ -355,7 +360,7 @@ async def file_detail(object_key: str, db: Session = Depends(get_db)):
         "last_modified": db_sub.last_modified,
     }
     
-    return result
+    return url, result
 
 if __name__ == "__main__":
     import uvicorn

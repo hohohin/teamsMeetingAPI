@@ -1,5 +1,6 @@
 import os
 from dotenv import load_dotenv
+from typing import Literal, Optional
 
 import http.client
 
@@ -8,7 +9,7 @@ import alibabacloud_oss_v2 as oss
 import alibabacloud_oss_v2.aio as oss_aio
 
 
-def init_client(region, use_internal=False):
+def init_client(is_asycn=True, region='cn-hongkong', endpoint=None):  # endpoint=Optional[Literal["internal", "custom"]]
     # 从环境变量中加载凭证信息，用于身份验证
     credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
 
@@ -19,10 +20,29 @@ def init_client(region, use_internal=False):
     # 方式一：只填写Region（推荐）
     # 必须指定Region ID，以华东1（杭州）为例，Region填写为cn-hangzhou，SDK会根据Region自动构造HTTPS访问域名
     cfg.region = region
-    cfg.use_internal_endpoint = use_internal
 
-    # 使用配置好的信息创建OSS异步客户端
-    client = oss_aio.AsyncClient(cfg)
+    # different ways to create client: origin / internal / custom domain
+    if endpoint is not None:
+        match endpoint:
+            case "internal":
+                cfg.use_internal_endpoint = True
+            case "custom":
+                # 设置自定义域名，例如“http://static.example.com”
+                cfg.endpoint = "ecmeetings.org"
+                # 设置使用CNAME
+                cfg.use_cname = True
+            case _:
+                raise ValueError(
+                    f"Invalid endpoint value: {endpoint!r}. "
+                    "Only 'internal' or 'custom' are allowed."
+                )
+
+    # 使用配置好的信息创建OSS同步/异步客户端
+    if is_asycn:
+        client = oss_aio.AsyncClient(cfg)
+    else:
+        client = oss.Client(cfg)
+
     return client
 
 
@@ -62,6 +82,9 @@ async def upload_file(client, key: str):
 
 
 async def get_all_files(client, bucket_name, prefix=""):
+    """
+    get all objects from aliyuncs async client
+    """
     try:
         # 创建ListObjectsV2操作的分页器
         objects = await client.list_objects_v2(oss.ListObjectsV2Request(
@@ -72,9 +95,26 @@ async def get_all_files(client, bucket_name, prefix=""):
         print(objects)
         return objects
     except Exception as e:
-        # logger.error(f"Upload failed: {e}")
-        # raise http.client.HTTPException()
-        print("error: ",e)
+        print("error while getting all: ",e)
+
+
+def get_object_url(client, object_key):
+    """ 
+    do not use asyncClient
+    Get object's download url.
+    Use internal client when submit to tingwu server.
+    Use custom client when need a preview or download link.
+    """
+    try:
+        pre_result = client.presign(
+        oss.GetObjectRequest(
+            bucket='yaps-meeting',  # 指定存储空间名称 / hard code for now
+            key=object_key,        # 指定对象键名
+        ))
+        return pre_result.url
+    
+    except Exception as e:
+        print("Error while getting the url: ",e)
 
     
 async def main():

@@ -12,7 +12,7 @@ import alibabacloud_oss_v2 as oss
 
 from dotenv import load_dotenv
 
-from aos import init_client
+import aos
 
 class QueryResult:
     MeetingAssistance: str
@@ -59,16 +59,9 @@ def create_client() -> tingwu20230930Client:
 
 
 def submit_task(oss_internal_client, task_key: str):
-    # oss internal client
-    oss_client = oss_internal_client
     # 生成预签名的GET请求
-    pre_result = oss_client.presign(
-        oss.GetObjectRequest(
-            bucket='yaps-meeting',  # 指定存储空间名称
-            key=task_key,        # 指定对象键名
-        )
-    )
-    internal_url = pre_result.url
+    internal_url = aos.get_object_url(oss_internal_client, task_key)
+    print(f"internal_url: {internal_url}")
 
     # stt client
     client = create_client()
@@ -114,7 +107,7 @@ def submit_task(oss_internal_client, task_key: str):
         #   "Message": "success",
         #   "RequestId": "2C771B34-8B01-5C7E-92A0-64150BDDDD0B"
         # }
-        if res.body.message != "success": # 具体得看百炼的返回结构
+        if res.body.message != "success":
             return {"task_id": "", "status": res.body.data.task_status}
 
         return {"task_id": res.body.data.task_id, "status": res.body.data.task_status}
