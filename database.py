@@ -44,6 +44,9 @@ class SubsMetaDB(Base):
     task_id = Column(String, default="")
     status = Column(String, default="NONE") 
     query_res = Column(Text, default="{}")
+    chapters = Column(Text, default="{}")
+    summary = Column(Text, default="{}")
+    transcripts = Column(Text, default="{}")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_modified: Mapped[str] = mapped_column(String, default="")
 
@@ -76,7 +79,7 @@ class SubsCRUD:
     def update_task(self, db_obj: SubsMetaDB, **kwargs):
         """通用更新函数"""
         for key, value in kwargs.items():
-            if key == "query_res" and isinstance(value, (dict, list)):
+            if key in ["query_res","chapters","summary","transcripts"] and isinstance(value, (dict, list)):
                 value = json.dumps(value, ensure_ascii=False)
             setattr(db_obj, key, value)
         

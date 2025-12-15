@@ -11,6 +11,9 @@ class SubsMeta(BaseModel):
     task_id: str = ""
     status: str = "NONE" or "COMPLETED" or "ONGOING"
     query_res: Dict[str, Any] = {}
+    chapters: Dict[str, Any] = {}
+    summary: Dict[str, Any] = {}
+    transcripts: Dict[str, Any] = {}
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     last_modified: str = ""
 

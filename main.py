@@ -4,6 +4,7 @@ import asyncio
 import logging
 import tos
 import json
+import httpx
 
 from uuid import uuid4
 from urllib.parse import quote
@@ -39,6 +40,27 @@ def get_tos_config(region: str):
             return "bucket4hk", "tos-cn-hongkong.volces.com"
         case _:
             raise ValueError(f"Unknown region: {region}")
+        
+async def jsonize_stt_url(url):
+    try:
+        # 使用异步上下文管理器发起请求
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url)
+            
+            # 检查 HTTP 状态码，如果不是 200 则抛出异常
+            response.raise_for_status()
+            
+            # 将响应内容解析为 JSON
+            data = response.json()
+            
+            return data
+            
+    except httpx.HTTPStatusError as e:
+        # 处理 HTTP 错误（例如 403 Forbidden, 404 Not Found）
+        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch data: {str(e)}")
+    except Exception as e:
+        # 处理其他错误
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 # --- 数据库依赖 ---
 def get_db():
@@ -56,7 +78,7 @@ async def process_submission(db: Session):
     """
     crud = SubsCRUD(db)
     pending_tasks = crud.get_tasks_by_status("NONE")
-    internal_client = aos.init_client(is_asycn=False, endpoint='internal')
+    internal_client = aos.init_client(is_asycn=False, endpoint='custom') # Oss url
     
     for task in pending_tasks:
         try:
@@ -74,7 +96,7 @@ async def process_submission(db: Session):
             
             # 2. 调用 Server 代码提交任务 (运行在线程池中以免阻塞)
             # 使用 task.id 作为 task_key，方便后续追踪
-            res = await asyncio.to_thread(server.submit_task, internal_client, task.id)
+            res = await asyncio.to_thread(server.submit_task, internal_client, task.object_key)
             
             # 3. 更新数据库
             if res and res.get("task_id"):
@@ -120,8 +142,16 @@ async def process_polling(db: Session):
                 result_data = res.body.data.result
                 # 转换 result 对象为 dict
                 result_dict = result_data.to_map() if hasattr(result_data, 'to_map') else result_data
+                chapters_url = result_dict["AutoChapters"]
+                summary_url = result_dict["Summarization"]
+                transcripts_url = result_dict["Transcription"]
+
+                chapters = await jsonize_stt_url(chapters_url)
+                summary = await jsonize_stt_url(summary_url)
+                transcripts = await jsonize_stt_url(transcripts_url)
                 
-                crud.update_task(task, status="COMPLETED", query_res=result_dict)
+                # update in database
+                crud.update_task(task, status="COMPLETED", query_res=result_dict, chapters=chapters, summary=summary, transcripts=transcripts)
                 logger.info(f"[Poll] Task {task.object_key} COMPLETED.")
                 
             elif remote_status == "FAILED":
@@ -212,8 +242,6 @@ async def get_files(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error syncing files: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        await client.close()
 
 @app.post("/api/upload/{region}")
 async def upload_file(region: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -230,7 +258,7 @@ async def upload_file(region: str, file: UploadFile = File(...), db: Session = D
             pass 
 
         # 2. 上传到 OSS (异步运行)
-        client = await init_client('cn-hongkong')
+        client = init_client('cn-hongkong')
 
         # 读取文件内容
         content = await file.read()
@@ -268,65 +296,7 @@ async def upload_file(region: str, file: UploadFile = File(...), db: Session = D
 @app.get("/api/download/{region}/{object_key}")
 async def download_file(region:str, object_key: str):
     # 后续可添加属性：下载次数
-    print(f"object key get: {object_key}, in {region}")
-    try:
-    # =========== 创建 TosClientV2 对象，对桶和对象的操作都通过 TosClientV2 实现
-        client = tos.TosClientV2(TOS_AK, TOS_SK, endpoint, region)
-
-        # def percentage(consumed_bytes, total_bytes, rw_once_bytes, type: DataTransferType):
-        #     if total_bytes:
-        #         rate = int(100 * float(consumed_bytes) / float(total_bytes))
-        #         print("rate:{}, consumed_bytes:{},total_bytes{}, rw_once_bytes:{}, type:{}"
-        #               .format(rate, consumed_bytes,total_bytes,rw_once_bytes, type))
-
-        # # 可通过 data_transfer_listener=percentage配置下载对象进度条
-        # object_stream = client.get_object_to_file(bucket_name, object_key, '\Download', data_transfer_listener=percentage)
-        # # 迭代读取对象内容 client.get_object_to_file(bucket_name, object_key, file_name)
-        # for content in object_stream:
-        #     print(f"downloading content: {content}")
-        print(f"downloading {object_key}")
-        # 1. 获取 TOS 对象流
-        output = client.get_object(bucket_name, object_key)
-        
-        # 2. 定义一个生成器函数来迭代读取数据
-        # 这里的 output 对应你代码中的 object_stream
-        def iterfile():
-            # 这里的 chunk_size 可以根据网络情况调整，通常 4KB 到 1MB 之间
-            # 如果 output 本身就是可迭代的 (如你的注释所示)，直接 yield 即可
-            for chunk in output:
-                yield chunk
-            
-            # 如果 SDK 需要显式关闭流，可以在这里处理
-            # output.close() 
-
-        # 2.1 对文件名进行 URL 编码
-        # 比如 "副本.png" 会变成 "%E5%89%AF%E6%9C%AC.png"
-        encoded_filename = quote(object_key)
-
-        # 3. 设置响应头
-        # filename*=utf-8''... 是现代浏览器处理非 ASCII 文件名的标准写法
-        headers = {
-            "Content-Disposition": f"attachment; filename*=utf-8''{encoded_filename}",
-            "Content-Type": "application/octet-stream"
-        }
-
-        # 4. 返回流式响应
-        return StreamingResponse(iterfile(), headers=headers)
-
-    except tos.exceptions.TosClientError as e:
-        # 操作失败，捕获客户端异常，一般情况为非法请求参数或网络异常
-        print('fail with client error, message:{}, cause: {}'.format(e.message, e.cause))
-    except tos.exceptions.TosServerError as e:
-        # 操作失败，捕获服务端异常，可从返回信息中获取详细错误信息
-        print('fail with server error, code: {}'.format(e.code))
-        # request id 可定位具体问题，强烈建议日志中保存
-        print('error with request id: {}'.format(e.request_id))
-        print('error with message: {}'.format(e.message))
-        print('error with http code: {}'.format(e.status_code))
-        print('error with ec: {}'.format(e.ec))
-        print('error with request url: {}'.format(e.request_url))
-    except Exception as e:
-        print('fail with unknown error: {}'.format(e))
+    return
 
 # 刪除記錄
 
@@ -356,11 +326,15 @@ async def file_detail(object_key: str, db: Session = Depends(get_db)):
         "task_id": db_sub.task_id,
         "status": db_sub.status,
         "query_res": json.loads(db_sub.query_res) if db_sub.query_res else {},
+        "summary": json.loads(db_sub.summary) if db_sub.summary else {},
+        "chapters": json.loads(db_sub.chapters) if db_sub.chapters else {},
+        "transcripts": json.loads(db_sub.transcripts) if db_sub.transcripts else {},
+        "url":url,
         "created_at": db_sub.created_at,
         "last_modified": db_sub.last_modified,
     }
     
-    return url, result
+    return result
 
 if __name__ == "__main__":
     import uvicorn
