@@ -173,10 +173,10 @@ async def background_worker():
                 # 2. 处理查询 (ONGOING -> COMPLETED)
                 await process_polling(db)
                 
-            await asyncio.sleep(5) # 休息5秒
+            await asyncio.sleep(15) # 休息5秒
         except Exception as e:
             logger.error(f"Critical error in background worker: {e}")
-        await asyncio.sleep(30)
+        await asyncio.sleep(10)
 
 # --- FastAPI App ---
 
