@@ -1,32 +1,30 @@
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from datetime import datetime, timedelta
+from jose import jwt
+from passlib.context import CryptContext
 
-app = FastAPI()
+# 配置项 (生产环境应放在环境变量中)
+SECRET_KEY = "your-very-secure-secret-key-change-this-in-production"
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-# 允许跨域
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], 
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
-# 指定的固定用户信息
-VALID_USERS = {
-    "UserOne": "userName123",
-    "Admin": "admin888"
-}
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
 
-class LoginRequest(BaseModel):
-    username: str
-    password: str
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
-@app.post("/login")
-async def login(data: LoginRequest):
-    stored_password = VALID_USERS.get(data.username)
-    if stored_password and stored_password == data.password:
-        # 实际开发中这里应返回 JWT
-        return {"token": "fake-jwt-token-for-" + data.username, "status": "success"}
-    
-    raise HTTPException(status_code=401, detail="用户名或密码错误")
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def decode_access_token(token: str):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload
+    except jwt.JWTError:
+        return None

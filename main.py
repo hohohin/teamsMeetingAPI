@@ -23,6 +23,7 @@ from models import SubsMeta
 import server  # 你的阿里云交互代码
 import aos
 
+
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
