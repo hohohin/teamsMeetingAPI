@@ -1,8 +1,6 @@
 # main.py
-import os
 import asyncio
 import logging
-import tos
 import json
 import httpx
 
@@ -11,15 +9,17 @@ from urllib.parse import quote
 from datetime import datetime
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, Request, Response
 from fastapi.responses import StreamingResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from passlib.context import CryptContext
 
 
 # 导入自定义模块
-from database import init_db, SessionLocal, SubsCRUD, SubsMetaDB
-from models import SubsMeta
+from database import init_db, SessionLocal, SubsCRUD, SubsMetaDB, UserCRUD, UserDB
+from models import LoginRequest
 import server  # 你的阿里云交互代码
 import aos
 
@@ -179,6 +179,25 @@ async def background_worker():
             logger.error(f"Critical error in background worker: {e}")
         await asyncio.sleep(10)
 
+
+# --- Authorization ---
+# 1. 配置密码哈希上下文
+pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
+# 2. 定义 Token 的数据模型 (Pydantic Schema)
+from models import Token
+# 关键点确认： pwd_context 是我们用来处理密码的工具。之后我们会用到它的两个方法：
+# pwd_context.hash(password): 加密密码。
+# pwd_context.verify(plain_password, hashed_password): 验证密码是否正确。
+
+# 到这一步，后端的基础设施就搭好了。接下来我们要进入最核心的部分：编写生成 JWT 的逻辑。
+# 为了生成 JWT，我们需要定义三个配置项：
+
+# SECRET_KEY: 密钥（千万不能泄露）。
+# ALGORITHM: 加密算法（通常用 HS256）。
+# ACCESS_TOKEN_EXPIRE_MINUTES: Token 多久过期。
+
+
 # --- FastAPI App ---
 
 @asynccontextmanager
@@ -203,7 +222,55 @@ app.add_middleware(
 )
 
 # --- API 路由 ---
+## --- 认证页面 ---
+from auth import create_access_token
+fake_users_db = {
+    "johndoe": {
+        "username": "johndoe",
+        # 这是 "secret" 的 Argon2 哈希值
+        "hashed_password": "$argon2id$v=19$m=65536,t=3,p=4$b611zlkrBSBk7N17D4Fwjg$0fY7261hhH3/GT4Uh+5J0YM8Vfik8lYb/vjt4LfSuLU" 
+    }
+}
 
+# 1. 专门用于从 Cookie 中提取 Token 的依赖项
+from auth import get_current_user
+
+# 2. 新增一个验证接口：只有登录用户才能调通
+@app.get("/users/me")
+async def read_users_me(current_user: str = Depends(get_current_user)):
+    return {"username": current_user}
+
+@app.post("/token")
+async def login_for_access_token(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
+    user = fake_users_db.get(form_data.username)
+    if not user or not pwd_context.verify(form_data.password, user["hashed_password"]):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token = create_access_token(data={"sub": user["username"]})
+    
+    # ✨ 魔法时刻：设置 httpOnly Cookie
+    response.set_cookie(
+        key="access_token",          # Cookie 的名字
+        value=f"Bearer {access_token}", # Cookie 的值
+        httponly=True,               # 🚫 关键！禁止 JavaScript 读取，防止 XSS
+        max_age=1800,                # 30分钟后过期
+        samesite="lax",              # 防止 CSRF 的一种策略
+        secure=False                 # 本地开发用 False (HTTP)，上线用 HTTPS 时必须改为 True
+    )
+    
+    return {"message": "Login successful"} # 返回简单的成功信息即可
+
+@app.post("/logout")
+async def logout(response: Response):
+    # 让浏览器删除名为 access_token 的 Cookie
+    response.delete_cookie(key="access_token") 
+    return {"message": "Logged out successfully"}
+
+## --- 功能页面
 @app.get("/api/files/")
 async def get_files(db: Session = Depends(get_db)):
     """同步 OSS 文件列表到数据库"""

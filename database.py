@@ -7,8 +7,6 @@ from typing import Optional, List, Dict, Any
 from sqlalchemy import create_engine, Column, String, Integer, BigInteger, Text, DateTime, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
-# --- 修改开始 ---
-
 # 1. 尝试从环境变量获取 DATABASE_URL（Render 会自动注入这个变量）
 # 如果没有（比如在本地运行），则默认使用 sqlite
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./subtitles.db")
@@ -21,7 +19,7 @@ if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
 else:
     # PostgreSQL 配置
-    # 【关键修复】Render 提供的 URL 通常是 postgres://，但 SQLAlchemy 需要 postgresql://
+    # Render 提供的 URL 通常是 postgres://，但 SQLAlchemy 需要 postgresql://
     if DATABASE_URL.startswith("postgres://"):
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -49,6 +47,21 @@ class SubsMetaDB(Base):
     transcripts = Column(Text, default="{}")
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_modified: Mapped[str] = mapped_column(String, default="")
+
+
+class UserDB(Base):
+    __tablename__ = "users"
+    # ID，使用自增整数作为主键
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # Agent CODE
+    agent_code = mapped_column(String, unique=True)
+    # 用户名/邮箱，必须是唯一的，用于登录
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    # 存储哈希后的密码 (绝不存储明文密码！)
+    password: Mapped[str] = mapped_column(String) 
+    # 用户的全名 (可选)
+    full_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
 
 def init_db():
     Base.metadata.create_all(bind=engine)
@@ -87,6 +100,41 @@ class SubsCRUD:
         self.db.commit()
         self.db.refresh(db_obj)
         return db_obj
+    
+
+class UserCRUD:
+    def __init__(self, db):
+        self.db = db
+
+    def create_user(self, agentcode: str, username: str, password: str, email: Optional[str] = None) -> UserDB:
+        """创建新用户"""
+        db_user = UserDB(
+            agentcode=agentcode,
+            username=username,
+            password=password,
+        )
+        self.db.add(db_user)
+        self.db.commit()
+        self.db.refresh(db_user)
+        return db_user
+
+    def get_user_by_username(self, username: str) -> Optional[UserDB]:
+        """根据用户名获取用户"""
+        return self.db.scalar(select(UserDB).where(UserDB.username == username))
+        
+    def get_user_by_agent_code(self, agent_code: str) -> Optional[UserDB]:
+        """根据 Agent Code 获取用户"""
+        # 使用 SQLAlchemy 的 select 语句来查询 users 表中 agent_code 匹配的记录
+        return self.db.scalar(select(UserDB).where(UserDB.agent_code == agent_code))
+
+    def update_some(self, db_user: UserDB):
+        # """更新用户的最后登录时间"""
+        # db_user.last_login = datetime.now(timezone.utc)
+        # self.db.commit()
+        # self.db.refresh(db_user)
+        return db_user
+    
+    
 
 # 依赖注入 Dependency
 def get_db():
