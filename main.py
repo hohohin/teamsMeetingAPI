@@ -15,11 +15,15 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from passlib.context import CryptContext
+from sqlmodel import select
 
 
 # 导入自定义模块
 from database import init_db, SessionLocal, SubsCRUD, SubsMetaDB, UserCRUD, UserDB
+from database_user import create_db_and_tables, get_session
+from database_user import User, UserCreate, UserRead
 from models import LoginRequest
+
 import server  # 你的阿里云交互代码
 import aos
 
@@ -204,6 +208,7 @@ from models import Token
 async def lifespan(app: FastAPI):
     # 启动初始化
     init_db()
+    create_db_and_tables()
     worker_task = asyncio.create_task(background_worker())
     yield
     # 关闭清理
@@ -223,7 +228,6 @@ app.add_middleware(
 
 # --- API 路由 ---
 ## --- 认证页面 ---
-from auth import create_access_token
 fake_users_db = {
     "johndoe": {
         "username": "johndoe",
@@ -233,24 +237,30 @@ fake_users_db = {
 }
 
 # 1. 专门用于从 Cookie 中提取 Token 的依赖项
-from auth import get_current_user
+from auth import create_access_token, get_current_user
+
 
 # 2. 新增一个验证接口：只有登录用户才能调通
-@app.get("/users/me")
-async def read_users_me(current_user: str = Depends(get_current_user)):
-    return {"username": current_user}
+# 依赖注入 (get_current_user) 帮你拿到了复杂的 Python 对象。
+# 响应模型 (response_model=User) 帮你把这个对象自动转换成了标准的 JSON 格式发给前端。
+@app.get("/users/me", response_model=UserRead)
+async def read_users_me(current_user: User = Depends(get_current_user)):
+    return current_user
 
 @app.post("/token")
-async def login_for_access_token(response: Response, form_data: OAuth2PasswordRequestForm = Depends()):
-    user = fake_users_db.get(form_data.username)
-    if not user or not pwd_context.verify(form_data.password, user["hashed_password"]):
+async def login_for_access_token(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
+# 这里有一个 FastAPI 的“冷知识”需要特别注意： 我们使用的 OAuth2PasswordRequestForm 是一个基于 OAuth2 标准的表单。这个标准规定，用户提交的“账号”字段名必须叫 username，哪怕实际上用户填的是邮箱或手机号。
+    statement = select(User).where(User.agent_code == form_data.username)
+    user = session.exec(statement).first()
+
+    if not user or not pwd_context.verify(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    access_token = create_access_token(data={"sub": user["username"]})
+    access_token = create_access_token(data={"sub": user.agent_code})
     
     # ✨ 魔法时刻：设置 httpOnly Cookie
     response.set_cookie(
@@ -264,11 +274,28 @@ async def login_for_access_token(response: Response, form_data: OAuth2PasswordRe
     
     return {"message": "Login successful"} # 返回简单的成功信息即可
 
+
 @app.post("/logout")
 async def logout(response: Response):
     # 让浏览器删除名为 access_token 的 Cookie
     response.delete_cookie(key="access_token") 
     return {"message": "Logged out successfully"}
+
+
+@app.post("/users", response_model=UserRead)
+async def create_user(user_create: UserCreate, session: Session = Depends(get_session)):
+    existing_user = session.exec(select(User).where(User.agent_code == user_create.agent_code)).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Code replicated")
+    # 1. 这里的 user_create.password 是明文，我们需要把它加密
+    hashed_password = pwd_context.hash(user_create.password)
+    # 2. 创建数据库模型实例
+    db_user = User.model_validate(user_create, update={"hashed_password": hashed_password})
+
+    session.add(db_user)
+    session.commit()
+    session.refresh(db_user)
+    return db_user
 
 ## --- 功能页面
 @app.get("/api/files/")
