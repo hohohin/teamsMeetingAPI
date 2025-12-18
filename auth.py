@@ -3,7 +3,7 @@ from fastapi import HTTPException, Request, status, Depends
 from sqlmodel import Session, select
 from jose import JWTError, jwt
 
-from database_user import get_session, User
+from databacy import get_db, User
 
 
 # ⚠️ 生产环境中，这个密钥必须由随机字符组成，且放在环境变量中！
@@ -14,7 +14,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 
 # 1. 专门用于从 Cookie 中提取 Token 的依赖项
-async def get_current_user(request: Request, session: Session = Depends(get_session)):
+async def get_current_user(request: Request, session: Session = Depends(get_db)):
     # 从 Cookie 中取出 token 字符串
     token = request.cookies.get("access_token")
     if not token:

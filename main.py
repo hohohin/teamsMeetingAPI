@@ -13,16 +13,14 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, R
 from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
 from passlib.context import CryptContext
-from sqlmodel import select
-
+from sqlmodel import Session, select
 
 # 导入自定义模块
-from database import init_db, SessionLocal, SubsCRUD, SubsMetaDB, UserCRUD, UserDB
-from database_user import create_db_and_tables, get_session
-from database_user import User, UserCreate, UserRead
-from models import LoginRequest
+from databacy import init_db, get_db, engine, Task, TaskCRUD, User, UserCreate, UserRead
+# from database_user import create_db_and_tables, get_session
+# from database_user import User, UserCreate, UserRead
+# from models import LoginRequest
 
 import server  # 你的阿里云交互代码
 import aos
@@ -68,12 +66,9 @@ async def jsonize_stt_url(url):
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}")
 
 # --- 数据库依赖 ---
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# def get_db():
+#     with Session(engine) as session:
+#         yield session
 
 # --- 核心：后台处理逻辑 ---
 
@@ -81,7 +76,7 @@ async def process_submission(db: Session):
     """
     阶段 1: 查找 status='NONE' 的记录 -> 构造URL -> 提交给阿里云 -> 更新为 'ONGOING'
     """
-    crud = SubsCRUD(db)
+    crud = TaskCRUD(db)
     pending_tasks = crud.get_tasks_by_status("NONE")
     internal_client = aos.init_client(is_asycn=False, endpoint='custom') # Oss url
     
@@ -122,7 +117,7 @@ async def process_polling(db: Session):
     """
     阶段 2: 查找 status='ONGOING' 的记录 -> 查询阿里云 -> 更新为 'COMPLETED'
     """
-    crud = SubsCRUD(db)
+    crud = TaskCRUD(db)
     ongoing_tasks = crud.get_tasks_by_status("ONGOING")
     # logger.info(f"ongoing task found: {ongoing_tasks}")
     
@@ -171,7 +166,7 @@ async def background_worker():
     logger.info("Background worker started.")
     while True:
         try:
-            with SessionLocal() as db:
+            with Session(engine) as db:
                 # 1. 处理提交 (NONE -> ONGOING)
                 await process_submission(db)
                 
@@ -189,7 +184,7 @@ async def background_worker():
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 # 2. 定义 Token 的数据模型 (Pydantic Schema)
-from models import Token
+# from models import Token
 # 关键点确认： pwd_context 是我们用来处理密码的工具。之后我们会用到它的两个方法：
 # pwd_context.hash(password): 加密密码。
 # pwd_context.verify(plain_password, hashed_password): 验证密码是否正确。
@@ -208,7 +203,7 @@ from models import Token
 async def lifespan(app: FastAPI):
     # 启动初始化
     init_db()
-    create_db_and_tables()
+    # create_db_and_tables()
     worker_task = asyncio.create_task(background_worker())
     yield
     # 关闭清理
@@ -248,7 +243,7 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 @app.post("/token")
-async def login_for_access_token(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
+async def login_for_access_token(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_db)):
 # 这里有一个 FastAPI 的“冷知识”需要特别注意： 我们使用的 OAuth2PasswordRequestForm 是一个基于 OAuth2 标准的表单。这个标准规定，用户提交的“账号”字段名必须叫 username，哪怕实际上用户填的是邮箱或手机号。
     statement = select(User).where(User.agent_code == form_data.username)
     user = session.exec(statement).first()
@@ -283,7 +278,7 @@ async def logout(response: Response):
 
 
 @app.post("/users", response_model=UserRead)
-async def create_user(user_create: UserCreate, session: Session = Depends(get_session)):
+async def create_user(user_create: UserCreate, session: Session = Depends(get_db)):
     existing_user = session.exec(select(User).where(User.agent_code == user_create.agent_code)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Code replicated")
@@ -301,17 +296,17 @@ async def create_user(user_create: UserCreate, session: Session = Depends(get_se
 @app.get("/api/files/")
 async def get_files(db: Session = Depends(get_db)):
     """同步 OSS 文件列表到数据库"""
-    crud = SubsCRUD(db)
+    crud = TaskCRUD(db)
     client = aos.init_client()
     try:
         result = await aos.get_all_files(client,'yaps-meeting')
         for item in result.contents:
             # 检查数据库是否存在
-            record = crud.get_sub_by_key(item.key)
+            record = crud.get_task_by_key(item.key)
             
             if record is None:
                 # 发现新文件，插入数据库，状态设为 NONE (等待后台自动提交)
-                new_sub = {
+                new_task = {
                     "id": str(uuid4()),
                     "object_key": item.key,
                     "region": 'cn-hongkong',
@@ -319,7 +314,7 @@ async def get_files(db: Session = Depends(get_db)):
                     "last_modified": item.last_modified.strftime("%Y-%m-%d %H:%M:%S"),
                     "status": "NONE"
                 }
-                crud.create_sub(new_sub)
+                crud.create_task(new_task)
                 logger.info(f"Synced new file: {item.key}")
             else:
                 # 更新已有文件信息
@@ -330,30 +325,33 @@ async def get_files(db: Session = Depends(get_db)):
                 )
 
         # 返回所有文件记录
-            all_records = crud.db.query(SubsMetaDB).all()
+            all_records = db.exec(select(Task)).all()
         # 注意：实际生产中这里应该分页，否则数据库大时会卡死
         return all_records
 
     except Exception as e:
         logger.error(f"Error syncing files: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # raise HTTPException(status_code=500, detail=str(e)) turn on in bebug
+        return []
 
 @app.post("/api/upload/{region}")
 async def upload_file(region: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     """上传文件到 TOS 并写入数据库 (Status=NONE)"""
     object_key = file.filename
-    crud = SubsCRUD(db)
+    crud = TaskCRUD(db)
+    if object_key is None:
+        return
 
     try:
         # 1. 检查数据库是否存在
-        existing = crud.get_sub_by_key(object_key)
+        existing = crud.get_task_by_key(object_key)
         if existing:
             # 简单策略：如果存在则报错，或者覆盖
             # 这里选择覆盖上传，但要重置状态
             pass 
 
         # 2. 上传到 OSS (异步运行)
-        client = init_client('cn-hongkong')
+        client = aos.init_client()
 
         # 读取文件内容
         content = await file.read()
@@ -363,7 +361,7 @@ async def upload_file(region: str, file: UploadFile = File(...), db: Session = D
 
         if res.status_code == 200:
             # 3. 写入/更新数据库
-            sub_data = {
+            task_data = {
                 "id": str(uuid4()),
                 "object_key": object_key,
                 "region": region,
@@ -375,8 +373,8 @@ async def upload_file(region: str, file: UploadFile = File(...), db: Session = D
                 crud.update_task(existing, status="NONE", region=region) # 重置状态以便重新听悟
                 result_id = existing.id
             else:
-                new_sub = crud.create_sub(sub_data)
-                result_id = new_sub.id
+                new_task = crud.create_task(task_data)
+                result_id = new_task.id
             
             logger.info(f"File {object_key} uploaded and DB record created.")
             return {"message": "Upload success", "id": result_id, "status": "queued"}
@@ -399,10 +397,10 @@ async def download_file(region:str, object_key: str):
 # 详情页
 @app.get("/api/meetings/{object_key}")
 async def file_detail(object_key: str, db: Session = Depends(get_db)):
-    crud = SubsCRUD(db)
-    db_sub = crud.get_sub_by_key(object_key)
+    crud = TaskCRUD(db)
+    db_task = crud.get_task_by_key(object_key)
     
-    if db_sub is None:
+    if db_task is None:
         raise HTTPException(status_code=404, detail="Subtitle not found")
     
     client = aos.init_client(is_asycn=False, endpoint='custom')
@@ -414,19 +412,19 @@ async def file_detail(object_key: str, db: Session = Depends(get_db)):
 
     # 如果 query_res 是 JSON 字符串，可以反序列化为 dict（可选）
     result = {
-        "id": db_sub.id,
-        "object_key": db_sub.object_key,
-        "region": db_sub.region,
-        "size": db_sub.size,
-        "task_id": db_sub.task_id,
-        "status": db_sub.status,
-        "query_res": json.loads(db_sub.query_res) if db_sub.query_res else {},
-        "summary": json.loads(db_sub.summary) if db_sub.summary else {},
-        "chapters": json.loads(db_sub.chapters) if db_sub.chapters else {},
-        "transcripts": json.loads(db_sub.transcripts) if db_sub.transcripts else {},
+        "id": db_task.id,
+        "object_key": db_task.object_key,
+        "region": db_task.region,
+        "size": db_task.size,
+        "task_id": db_task.task_id,
+        "status": db_task.status,
+        "query_res": json.loads(db_task.query_res) if db_task.query_res else {},
+        "summary": json.loads(db_task.summary) if db_task.summary else {},
+        "chapters": json.loads(db_task.chapters) if db_task.chapters else {},
+        "transcripts": json.loads(db_task.transcripts) if db_task.transcripts else {},
         "url":url,
-        "created_at": db_sub.created_at,
-        "last_modified": db_sub.last_modified,
+        "created_at": db_task.created_at,
+        "last_modified": db_task.last_modified,
     }
     
     return result

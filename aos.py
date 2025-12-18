@@ -96,6 +96,7 @@ async def get_all_files(client, bucket_name, prefix=""):
         return objects
     except Exception as e:
         print("error while getting all: ",e)
+        return {}
 
 
 def get_object_url(client, object_key):

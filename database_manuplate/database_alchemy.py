@@ -55,12 +55,11 @@ class UserDB(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     # Agent CODE
     agent_code = mapped_column(String, unique=True)
-    # 用户名/邮箱，必须是唯一的，用于登录
-    username: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    # 用户姓名【可选】
+    username: Mapped[Optional[str]] = mapped_column(String(50), unique=True, index=True)
     # 存储哈希后的密码 (绝不存储明文密码！)
     password: Mapped[str] = mapped_column(String) 
-    # 用户的全名 (可选)
-    full_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+
 
 
 def init_db():

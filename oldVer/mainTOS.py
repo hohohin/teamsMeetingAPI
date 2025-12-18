@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 
 # 导入自定义模块
-from database import init_db, SessionLocal, SubsCRUD, SubsMetaDB
+from database_manuplate.database_alchemy import init_db, SessionLocal, SubsCRUD, SubsMetaDB
 from models import SubsMeta
 import server  # 你的阿里云交互代码
 from aos import init_client, get_all_files

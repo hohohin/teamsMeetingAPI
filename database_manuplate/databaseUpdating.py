@@ -1,7 +1,7 @@
 import json
 import logging
 from sqlalchemy import select
-from database import SessionLocal, SubsMetaDB, SubsCRUD
+from database_manuplate.database_alchemy import SessionLocal, SubsMetaDB, SubsCRUD
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
