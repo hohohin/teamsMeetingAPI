@@ -236,11 +236,11 @@ from auth import create_access_token, get_current_user
 # 2. 新增一个验证接口：只有登录用户才能调通
 # 依赖注入 (get_current_user) 帮你拿到了复杂的 Python 对象。
 # 响应模型 (response_model=User) 帮你把这个对象自动转换成了标准的 JSON 格式发给前端。
-@app.get("api/users/me", response_model=UserRead)
+@app.get("/api/users/me", response_model=UserRead)
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
-@app.post("api/token")
+@app.post("/api/token")
 async def login_for_access_token(response: Response, form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_db)):
 # 这里有一个 FastAPI 的“冷知识”需要特别注意： 我们使用的 OAuth2PasswordRequestForm 是一个基于 OAuth2 标准的表单。这个标准规定，用户提交的“账号”字段名必须叫 username，哪怕实际上用户填的是邮箱或手机号。
     statement = select(User).where(User.agent_code == form_data.username)
@@ -268,14 +268,14 @@ async def login_for_access_token(response: Response, form_data: OAuth2PasswordRe
     return {"message": "Login successful"} # 返回简单的成功信息即可
 
 
-@app.post("api/logout")
+@app.post("/api/logout")
 async def logout(response: Response):
     # 让浏览器删除名为 access_token 的 Cookie
     response.delete_cookie(key="access_token") 
     return {"message": "Logged out successfully"}
 
 
-@app.post("api/users", response_model=UserRead)
+@app.post("/api/users", response_model=UserRead)
 def create_user(user_create: UserCreate, session: Session = Depends(get_db)):
     existing_user = session.exec(select(User).where(User.agent_code == user_create.agent_code)).first()
     if existing_user:
