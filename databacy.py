@@ -55,7 +55,7 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     # index=True 会给属性建索引，这样查找用户会非常快
     agent_code: str = Field(index=True, unique=True)
-    username: Optional[str] = '未设置用户名'
+    username: Optional[str] = Field(default='未设置用户名')
     # ⚠️ 注意：我们存的是加密后的字符串，所以字段名最好叫 hashed_password
     hashed_password: str
 

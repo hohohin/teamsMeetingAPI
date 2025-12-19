@@ -278,7 +278,7 @@ async def logout(response: Response):
 
 
 @app.post("/users", response_model=UserRead)
-async def create_user(user_create: UserCreate, session: Session = Depends(get_db)):
+def create_user(user_create: UserCreate, session: Session = Depends(get_db)):
     existing_user = session.exec(select(User).where(User.agent_code == user_create.agent_code)).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Code replicated")
@@ -286,9 +286,15 @@ async def create_user(user_create: UserCreate, session: Session = Depends(get_db
     hashed_password = pwd_context.hash(user_create.password)
     # 2. 创建数据库模型实例
     db_user = User.model_validate(user_create, update={"hashed_password": hashed_password})
-
-    session.add(db_user)
+    new_db_user = User(
+        agent_code = user_create.agent_code,
+        hashed_password = hashed_password
+    )
+    session.add(new_db_user)
+    # print(f"1. Add 之後: {new_db_user in session}")
     session.commit()
+    # print(f"2. Commit 之後: {new_db_user in session}")
+    # print(f"3. 生成的 ID: {new_db_user.id}")
     session.refresh(db_user)
     return db_user
 
