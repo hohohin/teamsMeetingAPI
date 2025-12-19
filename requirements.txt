@@ -4,6 +4,10 @@ tos
 psycopg2-binary
 alibabacloud_tingwu20230930==2.0.24
 python-dotenv
+sqlmodel
 sqlalchemy
 alibabacloud-oss-v2
 aiohttp
+passlib[argon2]
+python-jose
+python-multipart

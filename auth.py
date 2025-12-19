@@ -1,3 +1,4 @@
+import os
 from datetime import datetime, timedelta
 from fastapi import HTTPException, Request, status, Depends
 from sqlmodel import Session, select
@@ -8,7 +9,7 @@ from databacy import get_db, User
 
 # ⚠️ 生产环境中，这个密钥必须由随机字符组成，且放在环境变量中！
 # 你可以用 `openssl rand -hex 32` 生成一个
-SECRET_KEY = "your_super_secret_key_here_please_change_it"
+SECRET_KEY = os.getenv("SECRET_KEY", "your_super_secret_key_here_please_change_it")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 

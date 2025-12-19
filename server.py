@@ -1,6 +1,4 @@
 import os
-import sys
-from fastapi import HTTPException
 
 from alibabacloud_tingwu20230930.client import Client as tingwu20230930Client
 from alibabacloud_credentials.client import Client as CredentialClient
@@ -8,7 +6,6 @@ from alibabacloud_tea_openapi import models as open_api_models
 from alibabacloud_tingwu20230930 import models as tingwu_20230930_models
 from alibabacloud_tea_util import models as util_models
 from alibabacloud_tea_util.client import Client as UtilClient
-import alibabacloud_oss_v2 as oss
 
 from dotenv import load_dotenv
 

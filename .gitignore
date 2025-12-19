@@ -3,3 +3,5 @@
 removed
 .venv
 __pycache__
+.database_manipulate
+.oldVer

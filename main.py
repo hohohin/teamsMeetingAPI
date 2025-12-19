@@ -5,12 +5,10 @@ import json
 import httpx
 
 from uuid import uuid4
-from urllib.parse import quote
 from datetime import datetime
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, status, Request, Response
-from fastapi.responses import StreamingResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
@@ -343,53 +341,7 @@ async def get_files(db: Session = Depends(get_db)):
 @app.post("/api/upload/{region}")
 async def upload_file(region: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
     """上传文件到 TOS 并写入数据库 (Status=NONE)"""
-    object_key = file.filename
-    crud = TaskCRUD(db)
-    if object_key is None:
-        return
-
-    try:
-        # 1. 检查数据库是否存在
-        existing = crud.get_task_by_key(object_key)
-        if existing:
-            # 简单策略：如果存在则报错，或者覆盖
-            # 这里选择覆盖上传，但要重置状态
-            pass 
-
-        # 2. 上传到 OSS (异步运行)
-        client = aos.init_client()
-
-        # 读取文件内容
-        content = await file.read()
-        res = await asyncio.to_thread(
-            client.put_object, bucket_name, object_key, content=content
-        )
-
-        if res.status_code == 200:
-            # 3. 写入/更新数据库
-            task_data = {
-                "id": str(uuid4()),
-                "object_key": object_key,
-                "region": region,
-                "status": "NONE", # 关键：设置为 NONE，让后台 Worker 自动捕获并提交
-                "last_modified": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            if existing:
-                crud.update_task(existing, status="NONE", region=region) # 重置状态以便重新听悟
-                result_id = existing.id
-            else:
-                new_task = crud.create_task(task_data)
-                result_id = new_task.id
-            
-            logger.info(f"File {object_key} uploaded and DB record created.")
-            return {"message": "Upload success", "id": result_id, "status": "queued"}
-        else:
-            raise HTTPException(status_code=500, detail=f"TOS Upload failed: {res.status_code}")
-
-    except Exception as e:
-        logger.error(f"Upload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    return {"status":"function not ready yet"}
     
 # 下载会议文件
 @app.get("/api/download/{region}/{object_key}")
