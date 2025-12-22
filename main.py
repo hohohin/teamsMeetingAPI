@@ -303,29 +303,35 @@ async def get_files(db: Session = Depends(get_db)):
     crud = TaskCRUD(db)
     client = aos.init_client()
     try:
-        result = await aos.get_all_files(client,'yaps-meeting')
-        for item in result.contents:
+        dates, contents = await aos.get_all_files(client,'yaps-meeting')
+        for index, item in enumerate(contents):
+            # filter out folder name
+            key_start = item.key.find('/') + 1
+            if key_start != -1:
+                key = item.key[key_start:]
+            else:
+                key = item.key
             # 检查数据库是否存在
-            record = crud.get_task_by_key(item.key)
+            record = crud.get_task_by_key(key)
             
             if record is None:
                 # 发现新文件，插入数据库，状态设为 NONE (等待后台自动提交)
                 new_task = {
                     "id": str(uuid4()),
-                    "object_key": item.key,
+                    "object_key": key,
                     "region": 'cn-hongkong',
                     "size": item.size,
-                    "last_modified": item.last_modified.strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_modified": dates[index], #item.last_modified.strftime("%Y-%m-%d %H:%M:%S"),
                     "status": "NONE"
                 }
                 crud.create_task(new_task)
-                logger.info(f"Synced new file: {item.key}")
+                logger.info(f"Synced new file: {key}")
             else:
                 # 更新已有文件信息
                 crud.update_task(
                     record, 
                     size=item.size, 
-                    last_modified=item.last_modified.strftime("%Y-%m-%d %H:%M:%S")
+                    last_modified=dates[index]
                 )
 
         # 返回所有文件记录
@@ -337,6 +343,8 @@ async def get_files(db: Session = Depends(get_db)):
         logger.error(f"Error syncing files: {e}")
         # raise HTTPException(status_code=500, detail=str(e)) turn on in bebug
         return []
+    finally:
+        client.close()
 
 @app.post("/api/upload/{region}")
 async def upload_file(region: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
