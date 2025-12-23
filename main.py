@@ -233,25 +233,23 @@ async def login_for_access_token(response: Response, form_data: OAuth2PasswordRe
 # 这里有一个 FastAPI 的“冷知识”需要特别注意： 我们使用的 OAuth2PasswordRequestForm 是一个基于 OAuth2 标准的表单。这个标准规定，用户提交的“账号”字段名必须叫 username，哪怕实际上用户填的是邮箱或手机号。
     statement = select(User).where(User.agent_code == form_data.username)
     user = session.exec(statement).first()
+    if not user:
+        # 如果用户都没找到，那肯定是账号填错了
+        print(f"DEBUG: 用户 {form_data.username} 未找到") 
+        raise HTTPException(status_code=400, detail="User not found")
 
-    if not user or not pwd_context.verify(form_data.password, user.hashed_password):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect username or password",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+    # --- 🔍 插入调试代码开始 ---
+    print(f"DEBUG: 正在尝试登录用户: {user.agent_code}")
+    print(f"DEBUG: 前端输入的密码: '{form_data.password}'")
+    print(f"DEBUG: 数据库取出的哈希: '{user.hashed_password}'")
     
-    access_token = create_access_token(data={"sub": user.agent_code})
-    
-    # ✨ 魔法时刻：设置 httpOnly Cookie
-    response.set_cookie(
-        key="access_token",          # Cookie 的名字
-        value=f"Bearer {access_token}", # Cookie 的值
-        httponly=True,               # 🚫 关键！禁止 JavaScript 读取，防止 XSS
-        max_age=1800,                # 30分钟后过期
-        samesite="lax",              # 防止 CSRF 的一种策略
-        secure=IS_PRODUCTION                # 本地开发用 False (HTTP)，上线用 HTTPS 时必须改为 True
-    )
+    # 手动测试验证结果
+    is_valid = pwd_context.verify(form_data.password, user.hashed_password)
+    print(f"DEBUG: 手动验证结果: {is_valid}")
+    # --- 🔍 插入调试代码结束 ---
+
+    if not is_valid:  # 修改判断条件使用上面的变量
+        raise HTTPException(status_code=401, detail="User not found")
     
     return {"message": "Login successful"} # 返回简单的成功信息即可
 
@@ -272,15 +270,11 @@ def create_user(user_create: UserCreate, session: Session = Depends(get_db)):
     hashed_password = pwd_context.hash(user_create.password)
     # 2. 创建数据库模型实例
     db_user = User.model_validate(user_create, update={"hashed_password": hashed_password})
-    # new_db_user = User(
-    #     agent_code = user_create.agent_code,
-    #     hashed_password = hashed_password
-    # )
+
     session.add(db_user)
     # print(f"1. Add 之後: {new_db_user in session}")
     session.commit()
-    # print(f"2. Commit 之後: {new_db_user in session}")
-    # print(f"3. 生成的 ID: {new_db_user.id}")
+
     session.refresh(db_user)
     return db_user
 
