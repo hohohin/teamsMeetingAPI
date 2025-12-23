@@ -1,4 +1,5 @@
 # main.py
+import os
 import asyncio
 import logging
 import json
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 # 环境变量
 # TOS_AK = os.getenv("TOS_ACCESS_KEY")
 # TOS_SK = os.getenv("TOS_SECRET_KEY")
+IS_PRODUCTION = os.getenv("RENDER") is not None # Render 会自动注入这个变量
 
 # --- 辅助函数：TOS 配置映射 ---
 def get_tos_config(region: str):
@@ -76,27 +78,13 @@ async def process_submission(db: Session):
     """
     crud = TaskCRUD(db)
     pending_tasks = crud.get_tasks_by_status("NONE")
-    internal_client = aos.init_client(is_asycn=False, endpoint='custom') # Oss url
-    
-    for task in pending_tasks:
+    client = aos.init_client(is_async=False, endpoint='custom') # Oss url
+    total = len(pending_tasks)
+    for index,task in enumerate(pending_tasks):
         try:
-            logger.info(f"[Submit] Processing pending task: {task.object_key}")
-            
-            # 1. 构造 TOS URL
-            # bucket, endpoint = get_tos_config(task.region)
-            # 注意：如果是私有读Bucket，这里需要生成带签名的URL, 替换 URL 生成逻辑为：
-            # client = tos.TosClientV2(TOS_AK, TOS_SK, endpoint, task.region)
-            # file_url = client.generate_presigned_url("GET", bucket, task.object_key, expires=3600)
-
-            # 这里假设是公共读或者Tingwu服务器有权限访问
-            # file_url = f"https://{bucket}.{endpoint}/{quote(task.object_key)}"
-
-            
-            # 2. 调用 Server 代码提交任务 (运行在线程池中以免阻塞)
-            # 使用 task.id 作为 task_key，方便后续追踪
-            res = await asyncio.to_thread(server.submit_task, internal_client, task.object_key)
-            
-            # 3. 更新数据库
+            logger.info(f"[Submit] Processing {index + 1}/{total}: {task.object_key}")
+            res = await asyncio.to_thread(server.submit_task, client, task.object_key)
+            # 更新数据库
             if res and res.get("task_id"):
                 crud.update_task(
                     task, 
@@ -107,9 +95,11 @@ async def process_submission(db: Session):
             else:
                 logger.error(f"[Submit] Failed to submit {task.object_key}: {res}")
                 # 可选：增加重试计数，或者标记为 SUBMIT_FAILED
-                
+            
         except Exception as e:
             logger.error(f"[Submit] Error processing {task.object_key}: {e}")
+        finally:
+            await asyncio.sleep(2)
 
 async def process_polling(db: Session):
     """
@@ -167,14 +157,12 @@ async def background_worker():
             with Session(engine) as db:
                 # 1. 处理提交 (NONE -> ONGOING)
                 await process_submission(db)
-                
                 # 2. 处理查询 (ONGOING -> COMPLETED)
                 await process_polling(db)
-                
-            await asyncio.sleep(15) # 休息5秒
         except Exception as e:
             logger.error(f"Critical error in background worker: {e}")
-        await asyncio.sleep(10)
+        finally:
+            await asyncio.sleep(5)
 
 
 # --- Authorization ---
@@ -262,7 +250,7 @@ async def login_for_access_token(response: Response, form_data: OAuth2PasswordRe
         httponly=True,               # 🚫 关键！禁止 JavaScript 读取，防止 XSS
         max_age=1800,                # 30分钟后过期
         samesite="lax",              # 防止 CSRF 的一种策略
-        secure=False                 # 本地开发用 False (HTTP)，上线用 HTTPS 时必须改为 True
+        secure=IS_PRODUCTION                # 本地开发用 False (HTTP)，上线用 HTTPS 时必须改为 True
     )
     
     return {"message": "Login successful"} # 返回简单的成功信息即可
@@ -284,11 +272,11 @@ def create_user(user_create: UserCreate, session: Session = Depends(get_db)):
     hashed_password = pwd_context.hash(user_create.password)
     # 2. 创建数据库模型实例
     db_user = User.model_validate(user_create, update={"hashed_password": hashed_password})
-    new_db_user = User(
-        agent_code = user_create.agent_code,
-        hashed_password = hashed_password
-    )
-    session.add(new_db_user)
+    # new_db_user = User(
+    #     agent_code = user_create.agent_code,
+    #     hashed_password = hashed_password
+    # )
+    session.add(db_user)
     # print(f"1. Add 之後: {new_db_user in session}")
     session.commit()
     # print(f"2. Commit 之後: {new_db_user in session}")
@@ -297,35 +285,41 @@ def create_user(user_create: UserCreate, session: Session = Depends(get_db)):
     return db_user
 
 ## --- 功能页面
-@app.get("/api/files/")
+@app.get("/api/files")
 async def get_files(db: Session = Depends(get_db)):
     """同步 OSS 文件列表到数据库"""
     crud = TaskCRUD(db)
     client = aos.init_client()
     try:
-        result = await aos.get_all_files(client,'yaps-meeting')
-        for item in result.contents:
+        dates, contents = await aos.get_all_files(client,'yaps-meeting')
+        for index, item in enumerate(contents):
+            # filter out folder name
+            key_start = item.key.find('/') + 1
+            if key_start != -1:
+                key = item.key[key_start:]
+            else:
+                key = item.key
             # 检查数据库是否存在
-            record = crud.get_task_by_key(item.key)
+            record = crud.get_task_by_key(key)
             
             if record is None:
                 # 发现新文件，插入数据库，状态设为 NONE (等待后台自动提交)
                 new_task = {
                     "id": str(uuid4()),
-                    "object_key": item.key,
+                    "object_key": key,
                     "region": 'cn-hongkong',
                     "size": item.size,
-                    "last_modified": item.last_modified.strftime("%Y-%m-%d %H:%M:%S"),
+                    "last_modified": dates[index], #item.last_modified.strftime("%Y-%m-%d %H:%M:%S"),
                     "status": "NONE"
                 }
                 crud.create_task(new_task)
-                logger.info(f"Synced new file: {item.key}")
+                logger.info(f"Synced new file: {key}")
             else:
                 # 更新已有文件信息
                 crud.update_task(
                     record, 
                     size=item.size, 
-                    last_modified=item.last_modified.strftime("%Y-%m-%d %H:%M:%S")
+                    last_modified=dates[index]
                 )
 
         # 返回所有文件记录
@@ -337,6 +331,8 @@ async def get_files(db: Session = Depends(get_db)):
         logger.error(f"Error syncing files: {e}")
         # raise HTTPException(status_code=500, detail=str(e)) turn on in bebug
         return []
+    finally:
+        await client.close()
 
 @app.post("/api/upload/{region}")
 async def upload_file(region: str, file: UploadFile = File(...), db: Session = Depends(get_db)):
@@ -353,18 +349,20 @@ async def download_file(region:str, object_key: str):
 
 
 # 详情页
-@app.get("/api/meetings/{object_key}")
+@app.get("/api/meetings/detail")
 async def file_detail(object_key: str, db: Session = Depends(get_db)):
+    print(f"getting {object_key}")
     crud = TaskCRUD(db)
     db_task = crud.get_task_by_key(object_key)
     
     if db_task is None:
         raise HTTPException(status_code=404, detail="Subtitle not found")
     
-    client = aos.init_client(is_asycn=False, endpoint='custom')
+    client = aos.init_client(is_async=False, endpoint='custom')
 
     try:
-        url = aos.get_object_url(client, object_key)
+        # url = aos.get_object_url(client, object_key)
+        url = await asyncio.to_thread(aos.get_object_url, client, object_key)
     except Exception as e:
         raise HTTPException(500, f"Error getting url: {e}")
 

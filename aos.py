@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 from typing import Literal, Optional
+from datetime import datetime
 
 import http.client
 
@@ -9,7 +10,7 @@ import alibabacloud_oss_v2 as oss
 import alibabacloud_oss_v2.aio as oss_aio
 
 
-def init_client(is_asycn=True, region='cn-hongkong', endpoint=None):  # endpoint=Optional[Literal["internal", "custom"]]
+def init_client(is_async=True, region='cn-hongkong', endpoint=None):  # endpoint=Optional[Literal["internal", "custom"]]
     # 从环境变量中加载凭证信息，用于身份验证
     credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
 
@@ -28,7 +29,7 @@ def init_client(is_asycn=True, region='cn-hongkong', endpoint=None):  # endpoint
                 cfg.use_internal_endpoint = True
             case "custom":
                 # 设置自定义域名，例如“http://static.example.com”
-                cfg.endpoint = "ecmeetings.org"
+                cfg.endpoint = "oss.ecmeetings.org"
                 # 设置使用CNAME
                 cfg.use_cname = True
             case _:
@@ -38,7 +39,7 @@ def init_client(is_asycn=True, region='cn-hongkong', endpoint=None):  # endpoint
                 )
 
     # 使用配置好的信息创建OSS同步/异步客户端
-    if is_asycn:
+    if is_async:
         client = oss_aio.AsyncClient(cfg)
     else:
         client = oss.Client(cfg)
@@ -81,25 +82,30 @@ async def upload_file(client, key: str):
         await client.close()
 
 
-async def get_all_files(client, bucket_name, prefix=""):
+async def get_all_files(client, bucket_name, prefix="downloaded_videos/"):
     """
-    get all objects from aliyuncs async client
+    get all objects in downloaded_videos/ from aliyuncs async client
+    [item[1] for item in sorted_combined] for contents
+    [item[0] for item in sorted_combined] for dates
     """
     try:
         # 创建ListObjectsV2操作的分页器
-        objects = await client.list_objects_v2(oss.ListObjectsV2Request(
+        object = await client.list_objects_v2(oss.ListObjectsV2Request(
                 bucket=bucket_name,
                 prefix=prefix
             ))
 
-        print(objects)
-        return objects
+        # print(objects)
+        sorted_combined = sort_dates(object)
+        contents = [item[1] for item in sorted_combined]
+        dates = [item[0] for item in sorted_combined]
+        return dates, contents
     except Exception as e:
         print("error while getting all: ",e)
         return {}
 
 
-def get_object_url(client, object_key):
+def get_object_url(client, object_key) -> str:
     """ 
     do not use asyncClient
     Get object's download url.
@@ -110,21 +116,53 @@ def get_object_url(client, object_key):
         pre_result = client.presign(
         oss.GetObjectRequest(
             bucket='yaps-meeting',  # 指定存储空间名称 / hard code for now
-            key=object_key,        # 指定对象键名
+            key='downloaded_videos/'+object_key,        # 指定对象键名
         ))
         return pre_result.url
     
     except Exception as e:
         print("Error while getting the url: ",e)
+        return 'Invalid url'
+
+def get_date(key):
+    start = key.rfind('-') + 1
+    end = key.rfind('.')
+    date = key[start:end]
+    if len(date) > 6:
+        return None
+    else:
+        return datetime.strptime(date, "%m%d%y")
+
+def sort_key(item):
+    date_val = item[0]
+    if date_val is None:
+        return(0,None)
+    else:
+        return(1,date_val)
+
+def sort_dates(result):
+    """
+    [item[1] for item in sorted_combined] for contents
+    [item[0] for item in sorted_combined] for dates
+    """
+    keys = [content.key for content in result.contents]
+    key_dates = [get_date(key) for key in keys]
+    combined = zip(key_dates, result.contents)
+    sorted_combined = sorted(combined, key=sort_key, reverse=True)
+    sorted_content = [item[1] for item in sorted_combined]
+    return sorted_combined
 
     
 async def main():
-    ak = os.getenv("OSS_ACCESS_KEY_ID")
-    sk = os.getenv("OSS_ACCESS_KEY_SECRET")
-    region = 'cn-hongkong'
     bucket_name = 'yaps-meeting'
-    client = init_client(region)
-    await get_all_files(client, bucket_name)
+    client = init_client()
+    result = await get_all_files(client, bucket_name)
+    sorted_dates = sort_dates(result)
+    sorted_content = [item[1] for item in sorted_dates]
+    for index, item in enumerate(sorted_dates):
+        print(sorted_content[index], item[0])
+    # print(sorted_dates)
+    # await client.close()
 
 # 当此脚本被直接运行时，调用main函数
 if __name__ == "__main__":
