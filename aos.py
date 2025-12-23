@@ -10,7 +10,7 @@ import alibabacloud_oss_v2 as oss
 import alibabacloud_oss_v2.aio as oss_aio
 
 
-def init_client(is_asycn=True, region='cn-hongkong', endpoint=None):  # endpoint=Optional[Literal["internal", "custom"]]
+def init_client(is_async=True, region='cn-hongkong', endpoint=None):  # endpoint=Optional[Literal["internal", "custom"]]
     # 从环境变量中加载凭证信息，用于身份验证
     credentials_provider = oss.credentials.EnvironmentVariableCredentialsProvider()
 
@@ -29,7 +29,7 @@ def init_client(is_asycn=True, region='cn-hongkong', endpoint=None):  # endpoint
                 cfg.use_internal_endpoint = True
             case "custom":
                 # 设置自定义域名，例如“http://static.example.com”
-                cfg.endpoint = "ecmeetings.org"
+                cfg.endpoint = "oss.ecmeetings.org"
                 # 设置使用CNAME
                 cfg.use_cname = True
             case _:
@@ -39,7 +39,7 @@ def init_client(is_asycn=True, region='cn-hongkong', endpoint=None):  # endpoint
                 )
 
     # 使用配置好的信息创建OSS同步/异步客户端
-    if is_asycn:
+    if is_async:
         client = oss_aio.AsyncClient(cfg)
     else:
         client = oss.Client(cfg)
@@ -105,7 +105,7 @@ async def get_all_files(client, bucket_name, prefix="downloaded_videos/"):
         return {}
 
 
-def get_object_url(client, object_key):
+def get_object_url(client, object_key) -> str:
     """ 
     do not use asyncClient
     Get object's download url.
@@ -116,12 +116,13 @@ def get_object_url(client, object_key):
         pre_result = client.presign(
         oss.GetObjectRequest(
             bucket='yaps-meeting',  # 指定存储空间名称 / hard code for now
-            key=object_key,        # 指定对象键名
+            key='downloaded_videos/'+object_key,        # 指定对象键名
         ))
         return pre_result.url
     
     except Exception as e:
         print("Error while getting the url: ",e)
+        return 'Invalid url'
 
 def get_date(key):
     start = key.rfind('-') + 1
@@ -161,7 +162,7 @@ async def main():
     for index, item in enumerate(sorted_dates):
         print(sorted_content[index], item[0])
     # print(sorted_dates)
-    await client.close()
+    # await client.close()
 
 # 当此脚本被直接运行时，调用main函数
 if __name__ == "__main__":

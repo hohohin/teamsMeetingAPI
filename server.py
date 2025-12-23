@@ -55,10 +55,10 @@ def create_client() -> tingwu20230930Client:
     return tingwu20230930Client(config)
 
 
-def submit_task(oss_internal_client, task_key: str):
+def submit_task(oss_client, task_key: str):
     # 生成预签名的GET请求
-    internal_url = aos.get_object_url(oss_internal_client, task_key)
-    print(f"internal_url: {internal_url}")
+    cdn_url = aos.get_object_url(oss_client, task_key)
+    print(f"internal_url: {cdn_url}")
 
     # stt client
     client = create_client()
@@ -81,7 +81,7 @@ def submit_task(oss_internal_client, task_key: str):
     )
     input = tingwu_20230930_models.CreateTaskRequestInput(
         source_language='fspk',
-        file_url= internal_url,
+        file_url= cdn_url,
         task_key= task_key
     )
     create_task_request = tingwu_20230930_models.CreateTaskRequest(
@@ -94,16 +94,6 @@ def submit_task(oss_internal_client, task_key: str):
     headers = {}
     try:
         res = client.create_task_with_options(create_task_request, headers, runtime)
-        # res sample {
-        #   "Code": "0",
-        #   "Data": {
-        #     "TaskId": "3d904bb9a279403c8bcc535eb56a575e",
-        #     "TaskKey": "task_tingwu_123",
-        #     "TaskStatus": "ONGOING"
-        #   },
-        #   "Message": "success",
-        #   "RequestId": "2C771B34-8B01-5C7E-92A0-64150BDDDD0B"
-        # }
         if res.body.message != "success":
             return {"task_id": "", "status": res.body.data.task_status}
 
