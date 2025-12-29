@@ -187,13 +187,17 @@ pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # 启动初始化
-    init_db()
-    # create_db_and_tables()
-    worker_task = asyncio.create_task(background_worker())
+    # # 启动初始化
+    # init_db()
+    # # create_db_and_tables()
+    # worker_task = asyncio.create_task(background_worker())
+    # yield
+    # # 关闭清理
+    # worker_task.cancel()
+
+    # 临时测试用：
+    logger.info("Lifespan started, skipping DB for docs test")
     yield
-    # 关闭清理
-    worker_task.cancel()
 
 app = FastAPI(lifespan=lifespan)
 
@@ -383,4 +387,6 @@ async def file_detail(object_key: str, db: Session = Depends(get_db)):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # 获取环境变量 PORT，如果没有则默认为 8000 (用于本地开发)
+    port = int(os.getenv("PORT", 8000)) 
+    uvicorn.run(app, host="0.0.0.0", port=port)
