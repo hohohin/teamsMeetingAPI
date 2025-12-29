@@ -187,8 +187,8 @@ pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # # 启动初始化
-    # init_db()
+    # 启动初始化
+    init_db()
     # # create_db_and_tables()
     # worker_task = asyncio.create_task(background_worker())
     # yield
